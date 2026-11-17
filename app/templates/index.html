@@ -283,6 +283,7 @@
           <div class="card-title">Maintenance</div>
           <p class="hint">A cold reset restarts the BMC only. The host keeps running and comes back in about 90 seconds.</p>
           <div class="maintenance-actions">
+            <button class="btn btn-secondary" id="btn-change-connection">Change connection</button>
             <button class="btn btn-secondary" id="btn-kvm-reconnect">Reconnect KVM</button>
             <button class="btn btn-danger" id="btn-bmc-reset">Cold reset BMC</button>
           </div>
@@ -301,6 +302,51 @@
       </div>
     </section>
   </main>
+</div>
+
+<div class="connect-gate" id="connect-gate" hidden>
+  <div class="connect-card">
+    <div class="connect-brand">
+      <span class="brand-mark"><svg class="icon"><use href="#i-server"></use></svg></span>
+      <span class="brand-name">etegro</span>
+      <span class="brand-sub">BMC</span>
+    </div>
+    <div class="connect-title">Connect to a server</div>
+    <div class="connect-sub">Enter the BMC address and credentials, or find the BMC on the LAN.</div>
+
+    <div class="scan-row">
+      <button class="btn btn-secondary" id="btn-scan" type="button">Scan LAN</button>
+      <span class="scan-status" id="scan-status"></span>
+    </div>
+    <div class="scan-results" id="scan-results" hidden></div>
+
+    <form id="connect-form">
+      <div class="field">
+        <label for="connect-host">BMC address</label>
+        <input id="connect-host" class="mono" placeholder="192.168.0.182" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="connect-user">User</label>
+          <input id="connect-user" class="mono" value="root" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="connect-mac">Server MAC</label>
+          <input id="connect-mac" class="mono" placeholder="auto-detect" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="field">
+        <label for="connect-password">Password</label>
+        <input id="connect-password" type="password" placeholder="BMC password" autocomplete="current-password">
+      </div>
+      <label class="check"><input type="checkbox" id="connect-remember"> Remember password on this PC</label>
+      <div class="connect-error" id="connect-error"></div>
+      <div class="connect-actions">
+        <button class="btn btn-ghost" type="button" id="connect-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit" id="connect-submit">Connect</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="modal" id="modal" hidden>

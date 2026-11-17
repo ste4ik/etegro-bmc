@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """etegro BMC control panel - Flask backend + KVM bridge."""
+import base64
 import io
 import json
 import os
+import queue
+import re
 import select
 import socket
 import struct
@@ -107,6 +110,168 @@ def field(obj, name, default=None):
     return getattr(obj, name, default)
 
 
+# ---------------------------------------------------------------- credentials
+
+def protect_secret(secret):
+    """Encrypt with the current Windows user's DPAPI key. None when unavailable."""
+    if os.name != "nt" or not secret:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class DATA_BLOB(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD),
+                        ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+        def make(data):
+            buf = ctypes.create_string_buffer(data)
+            return DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), buf
+
+        in_blob, in_buf = make(secret.encode("utf-8"))
+        out_blob = DATA_BLOB()
+        kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        if not ctypes.windll.crypt32.CryptProtectData(
+                ctypes.byref(in_blob), None, None, None, None, 0x1,
+                ctypes.byref(out_blob)):
+            return None
+        try:
+            raw = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        finally:
+            kernel32.LocalFree(ctypes.cast(out_blob.pbData, ctypes.c_void_p))
+        return base64.b64encode(raw).decode("ascii")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def unprotect_secret(token):
+    if os.name != "nt" or not token:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class DATA_BLOB(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD),
+                        ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+        def make(data):
+            buf = ctypes.create_string_buffer(data)
+            return DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), buf
+
+        raw = base64.b64decode(token)
+        in_blob, in_buf = make(raw)
+        out_blob = DATA_BLOB()
+        kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        if not ctypes.windll.crypt32.CryptUnprotectData(
+                ctypes.byref(in_blob), None, None, None, None, 0x1,
+                ctypes.byref(out_blob)):
+            return None
+        try:
+            data = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        finally:
+            kernel32.LocalFree(ctypes.cast(out_blob.pbData, ctypes.c_void_p))
+        return data.decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def arp_mac(host):
+    try:
+        if os.name == "nt":
+            subprocess.run(["ping", "-n", "1", "-w", "800", host],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out = subprocess.run(["arp", "-a", host], capture_output=True, text=True,
+                                 timeout=6).stdout
+        else:
+            subprocess.run(["ping", "-c", "1", "-W", "1", host],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out = subprocess.run(["ip", "neigh", "show", host], capture_output=True,
+                                 text=True, timeout=6).stdout
+        match = re.search(r"([0-9a-fA-F]{2}(?:[-:][0-9a-fA-F]{2}){5})", out)
+        return match.group(1).replace("-", ":").lower() if match else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def local_ip():
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        finally:
+            sock.close()
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return ""
+
+
+def discover_bmcs(timeout=2.5, extra_host=None):
+    packet = bytearray(24)
+    packet[0:3] = b"G21"
+    packet[3] = ord("D")
+    packet[4] = 1
+    packet[6] = 1
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+    except (AttributeError, OSError):
+        pass
+    try:
+        sock.bind(("", 2000))
+    except OSError as exc:
+        sock.close()
+        raise RuntimeError("UDP port 2000 is busy; enter the address manually") from exc
+    sock.settimeout(0.2)
+    targets = [("255.255.255.255", 2000), ("225.0.0.3", 5000)]
+    ip = local_ip()
+    if ip and not ip.startswith("127."):
+        parts = ip.split(".")
+        if len(parts) == 4:
+            prefix = ".".join(parts[:3])
+            targets.extend((f"{prefix}.{i}", 2000) for i in range(1, 255))
+    if extra_host:
+        targets.append((extra_host, 2000))
+    for target in targets:
+        try:
+            sock.sendto(bytes(packet), target)
+        except OSError:
+            pass
+    found = {}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            data, addr = sock.recvfrom(2048)
+        except socket.timeout:
+            continue
+        except ConnectionResetError:
+            continue
+        except OSError:
+            break
+        if len(data) < 192 or data[:4] != b"G21D" or data[6] != 1:
+            continue
+        ip_bytes = data[166:170]
+        mac_bytes = data[160:166]
+        if len(ip_bytes) != 4 or len(mac_bytes) != 6:
+            continue
+        host_ip = ".".join(str(b) for b in ip_bytes)
+        mac = ":".join(f"{b:02x}" for b in mac_bytes)
+        hostname = data[32:160].split(b"\0")[0].decode("utf-8", "replace").strip()
+        found[host_ip] = {"ip": host_ip, "mac": mac,
+                          "hostname": hostname or "BMC"}
+    sock.close()
+    return sorted(found.values(), key=lambda item: item["ip"])
+
+
 # ---------------------------------------------------------------- IPMI
 
 _ipmi_lock = threading.Lock()
@@ -125,67 +290,167 @@ def _cached(name, ttl, producer):
     return value
 
 
-class Bmc:
-    def __init__(self):
-        self.config = load_config()
-        self.password = read_password()
-        self.cmd = None
-        self.cmd_lock = threading.Lock()
+class IpmiWorker:
+    """One pyghmi session in its own process, spoken to over a pipe."""
 
-    def _command(self):
-        from pyghmi.ipmi import command as ipmi_command
-        if self.cmd is None:
-            self.cmd = ipmi_command.Command(bmc=self.config["host"],
-                                            userid=self.config["user"],
-                                            password=self.password,
-                                            keepalive=False)
-        return self.cmd
+    def __init__(self, host, user, password):
+        env = dict(os.environ)
+        env.update({
+            "ESMS_WORKER_HOST": host,
+            "ESMS_WORKER_USER": user,
+            "ESMS_WORKER_PASS": password,
+        })
+        creationflags = 0x08000000 if os.name == "nt" else 0
+        self.lock = threading.Lock()
+        self.queue = queue.Queue()
+        self.proc = subprocess.Popen(
+            [sys.executable, os.path.join(APP_DIR, "ipmi_worker.py")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", bufsize=1, env=env,
+            cwd=APP_DIR, creationflags=creationflags)
+        threading.Thread(target=self._reader, daemon=True).start()
 
-    def reset_session(self):
-        with self.cmd_lock:
-            cmd, self.cmd = self.cmd, None
-        if cmd is not None:
+    def _reader(self):
+        proc = self.proc
+        if not proc or not proc.stdout:
+            return
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("{"):
+                self.queue.put(line)
+
+    def request(self, command, timeout=20, **payload):
+        with self.lock:
+            proc = self.proc
+            if not proc or proc.poll() is not None:
+                raise RuntimeError("IPMI worker is not running")
+            request = {"cmd": command}
+            request.update(payload)
             try:
-                cmd.ipmi_session.logout()
+                proc.stdin.write(json.dumps(request) + "\n")
+                proc.stdin.flush()
+            except OSError as exc:
+                raise RuntimeError(f"IPMI worker write failed: {exc}") from exc
+            try:
+                line = self.queue.get(timeout=timeout)
+            except queue.Empty as exc:
+                raise TimeoutError("IPMI call timed out") from exc
+            try:
+                response = json.loads(line)
+            except ValueError as exc:
+                raise RuntimeError("bad IPMI worker response") from exc
+            if not response.get("ok"):
+                raise RuntimeError(response.get("error", "IPMI error"))
+            return response.get("data")
+
+    def stop(self):
+        with self.lock:
+            proc = self.proc
+            self.proc = None
+            if not proc:
+                return
+            try:
+                proc.stdin.close()
             except Exception:  # noqa: BLE001
                 pass
-
-    def call(self, fn, timeout=15):
-        """Run one IPMI call on the shared session, with a hard response limit."""
-        if not self.password:
-            raise RuntimeError("BMC password is not set")
-        result = {}
-
-        def worker():
-            cmd = None
             try:
-                with self.cmd_lock:
-                    cmd = self._command()
-                    result["value"] = fn(cmd)
-            except Exception as exc:  # noqa: BLE001
-                result["error"] = exc
-                with self.cmd_lock:
-                    if self.cmd is cmd:
-                        self.cmd = None
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:  # noqa: BLE001
                 try:
-                    if cmd is not None:
-                        cmd.ipmi_session.logout()
+                    proc.kill()
                 except Exception:  # noqa: BLE001
                     pass
 
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join(timeout)
-        if thread.is_alive():
-            raise TimeoutError("IPMI call timed out")
-        if "error" in result:
-            raise result["error"]
-        return result.get("value")
+
+class Bmc:
+    def __init__(self):
+        self.config = load_config()
+        self.password = (read_password()
+                         or unprotect_secret(self.config.get("password_enc")))
+        self.worker = None
+        self.worker_error = ""
+        if self.config.get("host") and self.password:
+            try:
+                self.start_worker()
+            except Exception as exc:  # noqa: BLE001
+                self.worker_error = str(exc)
+
+    def start_worker(self, host=None, user=None, password=None):
+        self.stop_worker()
+        host = host or self.config.get("host")
+        user = user or self.config.get("user", "root")
+        password = password or self.password
+        if not host:
+            raise RuntimeError("BMC address is not set")
+        if not password:
+            raise RuntimeError("BMC password is not set")
+        worker = IpmiWorker(host, user, password)
+        try:
+            worker.request("power", timeout=20)
+        except Exception:
+            worker.stop()
+            raise
+        self.worker = worker
+        self.worker_error = ""
+        return True
+
+    def stop_worker(self):
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker = None
+
+    def request(self, command, timeout=20, **payload):
+        if self.worker is None:
+            try:
+                self.start_worker()
+            except Exception as exc:  # noqa: BLE001
+                self.worker_error = str(exc)
+                raise RuntimeError(str(exc)) from exc
+        try:
+            return self.worker.request(command, timeout=timeout, **payload)
+        except Exception as exc:  # noqa: BLE001
+            self.worker_error = str(exc)
+            self.stop_worker()
+            raise
+
+    def connect(self, host, user, password, mac=""):
+        previous = (self.config.get("host"), self.config.get("user"), self.password)
+        self.stop_worker()
+        worker = None
+        try:
+            worker = IpmiWorker(host, user, password)
+            power = worker.request("power", timeout=20)
+            mac_from_ipmi = ""
+            try:
+                mac_from_ipmi = worker.request("net", timeout=12).get("mac", "")
+            except Exception:  # noqa: BLE001
+                pass
+            mac = mac or mac_from_ipmi or arp_mac(host)
+            if not mac:
+                raise RuntimeError("Could not detect the server MAC. "
+                                   "Enter it manually and retry.")
+            self.worker = worker
+            self.worker_error = ""
+            self.config.update(host=host, user=user, mac=mac)
+            self.password = password
+            return power
+        except Exception:
+            if worker is not None:
+                worker.stop()
+            try:
+                self.config.update(host=previous[0], user=previous[1])
+                self.password = previous[2]
+                if previous[0] and previous[2]:
+                    self.start_worker(previous[0], previous[1], previous[2])
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     def power(self):
         def producer():
             try:
-                return self.call(lambda c: c.get_power().get("powerstate", "unknown"))
+                return self.request("power")
             except Exception as exc:  # noqa: BLE001
                 return f"error: {exc}"
         return _cached("power", 3, producer)
@@ -193,17 +458,7 @@ class Bmc:
     def sensors(self):
         def producer():
             try:
-                rows = []
-                for sensor in self.call(lambda c: list(c.get_sensor_data())):
-                    value = field(sensor, "value")
-                    rows.append({
-                        "name": field(sensor, "name", "").replace("\x00", "").strip(),
-                        "value": value,
-                        "units": field(sensor, "units", ""),
-                        "health": field(sensor, "health", 0),
-                        "type": field(sensor, "type", ""),
-                    })
-                return rows
+                return self.request("sensors")
             except Exception as exc:  # noqa: BLE001
                 return [{"name": "error", "value": None, "units": "", "health": 3,
                          "type": str(exc)}]
@@ -212,17 +467,7 @@ class Bmc:
     def sel(self, limit=80):
         def producer():
             try:
-                events = []
-                for event in self.call(lambda c: list(c.get_event_log())):
-                    severity = field(event, "severity", 0)
-                    if isinstance(severity, int):
-                        severity = {0: "Info", 1: "Warning", 2: "Critical"}.get(
-                            severity, str(severity))
-                    events.append({
-                        "timestamp": field(event, "timestamp", "") or field(event, "time", ""),
-                        "severity": severity,
-                        "description": field(event, "description", "") or field(event, "event", ""),
-                    })
+                events = self.request("sel")
                 return events[-limit:][::-1]
             except Exception as exc:  # noqa: BLE001
                 return [{"timestamp": "", "severity": "error", "description": str(exc)}]
@@ -231,13 +476,7 @@ class Bmc:
     def fru(self):
         def producer():
             try:
-                rows = []
-                for name, info in self.call(lambda c: list(c.get_inventory())):
-                    if not info:
-                        continue
-                    rows.append({"name": name, "info": {k: str(v) for k, v in info.items()
-                                                        if v not in (None, "")}})
-                return rows
+                return self.request("fru")
             except Exception as exc:  # noqa: BLE001
                 return [{"name": "error", "info": {"error": str(exc)}}]
         return _cached("fru", 60, producer)
@@ -247,10 +486,10 @@ class Bmc:
                    "shutdown": "shutdown"}
         if action not in mapping:
             raise ValueError("unknown power action")
-        result = self.call(lambda c: c.set_power(mapping[action]))
+        result = self.request("power_action", action=mapping[action])
         with _cache_lock:
             _cache.pop("power", None)
-        return result.get("powerstate", mapping[action])
+        return result
 
     def set_boot(self, device):
         mapping = {"pxe": "network", "net": "network", "hd": "hd", "disk": "hd",
@@ -258,25 +497,20 @@ class Bmc:
                    "default": "default"}
         if device not in mapping:
             raise ValueError("unknown boot device")
-        return str(self.call(lambda c: c.set_bootdev(mapping[device])))
+        return str(self.request("set_boot", device=mapping[device]))
 
     def reset_bmc(self):
-        result = self.call(lambda c: c.raw_command(netfn=0x06, command=0x02))
-        self.reset_session()
+        result = self.request("reset_bmc")
+        self.stop_worker()
         return str(result)
 
     def bmc_info(self):
         def producer():
             try:
-                raw = self.call(lambda c: c.raw_command(netfn=0x06, command=0x01))
-                data = bytes(raw.get("data", b""))
-                major = data[2] if len(data) > 2 else 0
-                minor = data[3] if len(data) > 3 else 0
-                return {"firmware": f"{major}.{minor:02x}", "raw": data.hex()}
+                return self.request("info", timeout=15)
             except Exception as exc:  # noqa: BLE001
                 return {"firmware": "unknown", "raw": str(exc)}
         return _cached("bmc_info", 300, producer)
-
 
 bmc = Bmc()
 
@@ -379,7 +613,9 @@ class KvmSession:
 
     def start(self):
         if self.thread and self.thread.is_alive():
-            return
+            if self.running:
+                return
+            self.thread.join(timeout=2)
         self.running = True
         self.thread = threading.Thread(target=self._run, name="kvm", daemon=True)
         self.thread.start()
@@ -387,6 +623,9 @@ class KvmSession:
     def stop(self):
         self.running = False
         self._close()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2)
+        self.thread = None
 
     def _close(self):
         for sock in (self.control.sock if self.control else None,
@@ -647,6 +886,58 @@ def shots(name):
     return send_from_directory(SHOTS_DIR, name)
 
 
+@app.route("/api/discover")
+def api_discover():
+    try:
+        timeout = float(request.args.get("timeout", "2.5"))
+    except ValueError:
+        timeout = 2.5
+    timeout = max(1.0, min(6.0, timeout))
+    try:
+        devices = discover_bmcs(timeout, bmc.config.get("host"))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"devices": [], "error": str(exc)})
+    return jsonify({"devices": devices})
+
+
+@app.route("/api/connect", methods=["POST"])
+def api_connect():
+    global bmc
+    payload = request.get_json(force=True, silent=True) or {}
+    host = str(payload.get("host", "")).strip()
+    user = str(payload.get("user", "") or "root").strip() or "root"
+    password = str(payload.get("password", "") or "")
+    if not password:
+        password = bmc.password or read_password() or ""
+    mac = str(payload.get("mac", "") or "").strip().lower()
+    remember = bool(payload.get("remember"))
+    if not host:
+        return jsonify({"ok": False, "error": "BMC address is required"}), 400
+    if not password:
+        return jsonify({"ok": False, "error": "Password is required"}), 400
+    try:
+        power = bmc.connect(host, user, password, mac)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if remember:
+        token = protect_secret(password)
+        if token:
+            bmc.config["password_enc"] = token
+        else:
+            bmc.config.pop("password_enc", None)
+    else:
+        bmc.config.pop("password_enc", None)
+    save_config(bmc.config)
+    with _cache_lock:
+        _cache.clear()
+    kvm.bmc = bmc
+    kvm.stop()
+    time.sleep(0.1)
+    kvm.start()
+    return jsonify({"ok": True, "mac": bmc.config["mac"], "power": power,
+                    "remembered": bool(bmc.config.get("password_enc"))})
+
+
 @app.route("/api/status")
 def api_status():
     config = bmc.config
@@ -656,6 +947,9 @@ def api_status():
         "host": config["host"],
         "user": config["user"],
         "mac": config["mac"],
+        "configured": bool(config.get("host")),
+        "has_password": bool(bmc.password),
+        "remembered": bool(config.get("password_enc")),
         "password_set": bool(bmc.password),
         "power": bmc.power(),
         "bmc": bmc.bmc_info(),
@@ -754,6 +1048,7 @@ def api_kvm_screenshot():
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
+    global bmc
     if request.method == "GET":
         cfg = dict(bmc.config)
         return jsonify({"config": cfg, "password_set": bool(bmc.password)})
@@ -769,6 +1064,12 @@ def api_config():
     if payload.get("password"):
         bmc.password = str(payload["password"])
     save_config(bmc.config)
+    bmc.stop_worker()
+    try:
+        bmc.start_worker()
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    kvm.bmc = bmc
     with _cache_lock:
         _cache.clear()
     kvm.stop()
@@ -791,7 +1092,8 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-window", action="store_true")
     args = parser.parse_args()
-    kvm.start()
+    if bmc.config.get("host") and bmc.password:
+        kvm.start()
     threading.Thread(target=lambda: app.run(host="127.0.0.1", port=args.port, threaded=True,
                                             use_reloader=False, debug=False),
                      daemon=True).start()

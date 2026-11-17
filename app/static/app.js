@@ -148,6 +148,8 @@
 
   async function pollStatus() {
     if (state.polling.status) return;
+    const gate = $("#connect-gate");
+    if (gate && !gate.hidden) return;
     state.polling.status = true;
     try {
       const status = await api("/api/status");
@@ -221,6 +223,8 @@
 
   async function pollSensors() {
     if (state.polling.sensors) return;
+    const gate = $("#connect-gate");
+    if (gate && !gate.hidden) return;
     state.polling.sensors = true;
     try {
       const data = await api("/api/sensors");
@@ -710,6 +714,120 @@
     }
   });
 
+  // ------------------------------------------------------------------ connect
+
+  function showGate(required, status) {
+    const gate = $("#connect-gate");
+    if (!gate) return;
+    const view = status || state.status || {};
+    if (view.host) $("#connect-host").value = view.host;
+    if (view.user) $("#connect-user").value = view.user;
+    if (view.mac) $("#connect-mac").value = view.mac;
+    $("#connect-cancel").hidden = Boolean(required);
+    $("#connect-error").textContent = "";
+    const submit = $("#connect-submit");
+    submit.disabled = false;
+    submit.textContent = "Connect";
+    gate.hidden = false;
+    setTimeout(() => {
+      if (!$("#connect-host").value) $("#connect-host").focus();
+      else $("#connect-password").focus();
+    }, 50);
+  }
+
+  function hideGate() {
+    const gate = $("#connect-gate");
+    if (gate) gate.hidden = true;
+  }
+
+  async function scanLan() {
+    const button = $("#btn-scan");
+    const status = $("#scan-status");
+    const box = $("#scan-results");
+    button.disabled = true;
+    status.textContent = "Scanning the LAN…";
+    box.hidden = true;
+    try {
+      const data = await api("/api/discover?timeout=3");
+      const devices = data.devices || [];
+      if (!devices.length) {
+        status.textContent = data.error || "No BMC found. Enter the address manually.";
+        return;
+      }
+      status.textContent = `${devices.length} found`;
+      box.innerHTML = devices.map((device) => `
+        <div class="scan-item" data-ip="${escapeHtml(device.ip)}" data-mac="${escapeHtml(device.mac)}">
+          <span class="scan-name">${escapeHtml(device.hostname || "BMC")}</span>
+          <span class="scan-meta">${escapeHtml(device.ip)} · ${escapeHtml(device.mac)}</span>
+        </div>`).join("");
+      box.hidden = false;
+      $$(".scan-item", box).forEach((item) => {
+        item.addEventListener("click", () => {
+          $("#connect-host").value = item.dataset.ip;
+          $("#connect-mac").value = item.dataset.mac;
+          status.textContent = `Selected ${item.dataset.ip}`;
+          $("#connect-password").focus();
+        });
+      });
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function submitConnect(event) {
+    event.preventDefault();
+    const button = $("#connect-submit");
+    const errorBox = $("#connect-error");
+    const payload = {
+      host: $("#connect-host").value.trim(),
+      user: $("#connect-user").value.trim() || "root",
+      password: $("#connect-password").value,
+      mac: $("#connect-mac").value.trim(),
+      remember: $("#connect-remember").checked,
+    };
+    errorBox.textContent = "";
+    button.disabled = true;
+    button.textContent = "Connecting…";
+    try {
+      const result = await api("/api/connect", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      $("#connect-password").value = "";
+      hideGate();
+      toast(`Connected to ${result.mac}`, "ok");
+      if (result.remembered) toast("Password saved for this Windows user", "ok");
+      await pollStatus();
+      await pollSensors();
+      loadSel();
+    } catch (error) {
+      errorBox.textContent = error.message;
+      button.disabled = false;
+      button.textContent = "Connect";
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      const status = await api("/api/status");
+      state.status = status;
+      const need = !status.configured || !status.has_password;
+      if (need || location.search.includes("connect")) showGate(need, status);
+    } catch (error) {
+      showGate(true, null);
+    }
+    pollStatus();
+    pollSensors();
+    loadSel();
+  }
+
+  $("#btn-scan").addEventListener("click", scanLan);
+  $("#connect-form").addEventListener("submit", submitConnect);
+  $("#connect-cancel").addEventListener("click", hideGate);
+  $("#btn-change-connection").addEventListener("click", () => showGate(false, state.status));
+
   // ------------------------------------------------------------------ init
 
   $("#btn-refresh-top").addEventListener("click", () => {
@@ -723,9 +841,7 @@
 
   const initial = location.hash.replace(/^#\//, "") || "overview";
   navigate(initial);
-  pollStatus();
-  pollSensors();
-  loadSel();
+  bootstrap();
 
   setInterval(pollStatus, 2000);
   setInterval(pollSensors, 5000);

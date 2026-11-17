@@ -11,6 +11,8 @@ your BMC and fetches a matching Temurin 8 x86 JRE from Adoptium.
 
 ## Features
 
+- **Connect screen** — scan the LAN for BMCs or type the address, enter the
+  user and password, optionally remember the password for this Windows user.
 - **Overview** — power state, CPU/mainboard temperatures, fans, a live thermals
   chart and the latest SEL entries.
 - **Console** — live 1024×768 KVM, keyboard capture, absolute mouse,
@@ -48,16 +50,30 @@ python setup.py --host 10.0.0.10
 4. writes `app/config.json` with the BMC address, user and server MAC.
 
 The MAC is read from the ARP cache when possible, otherwise it asks. The BMC
-uses it for the KVM login, so it must match the server.
+uses it for the KVM login, so it must match the server. The app can also scan
+the LAN and fill both address and MAC on first launch.
 
-Set the BMC password once per user:
+The password can be entered in the app and optionally remembered with Windows
+DPAPI. `ESMS_PASS` remains supported as a silent fallback:
 
 ```powershell
 setx ESMS_PASS "your-bmc-password"
 ```
 
-The password is read from `ESMS_PASS` (environment or the user registry) and is
-never written to disk.
+The password is never written to disk in plain text.
+
+## First run
+
+![Connect](docs/connect.png)
+
+On launch, if no password is available, the panel asks to connect. **Scan LAN**
+sends the BMC discovery request and lists the BMCs it finds; pick one to fill
+the address and MAC, or type the address. The server MAC is auto-detected from
+IPMI, falling back to ARP. Check **Remember password on this PC** to store it
+encrypted with the current Windows user's DPAPI key; leave it off to enter the
+password each time.
+
+The connect screen is also available later from **Settings → Change connection**.
 
 ## Run
 
@@ -89,8 +105,9 @@ from `ESMS_PASS`. Requires `pyghmi`.
 
 ## How it works
 
-- **IPMI** — pyghmi over UDP 623. One long-lived session per process
-  (`keepalive=False`); some BMCs reject or hang on rapid session churn.
+- **IPMI** — pyghmi over UDP 623, in a separate worker process. One long-lived
+  session; if it breaks, the worker is restarted without touching the web
+  process.
 - **KVM control** — TCP 8890, login with an md5-crypt password and the server
   MAC; heartbeat every 5 s.
 - **Video** — TCP 8900. Frames are a custom 32-byte header followed by a
