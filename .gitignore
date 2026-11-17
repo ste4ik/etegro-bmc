@@ -1,0 +1,12 @@
+# fetched or generated locally
+runtime/
+vendor/
+app/config.json
+app/app.log
+app/app.err.log
+app/static/shots/
+
+# python
+__pycache__/
+*.pyc
+*.pyo

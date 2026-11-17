@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>etegro · BMC</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='2' width='20' height='8' rx='2' fill='none' stroke='%23dda43f' stroke-width='1.5'/%3E%3Crect x='2' y='14' width='20' height='8' rx='2' fill='none' stroke='%23dda43f' stroke-width='1.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></symbol>
+  <symbol id="i-thermometer" viewBox="0 0 24 24"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></symbol>
+  <symbol id="i-fan" viewBox="0 0 24 24"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark"><svg class="icon"><use href="#i-server"></use></svg></span>
+      <span class="brand-name">etegro</span>
+      <span class="brand-sub">BMC</span>
+    </div>
+    <nav class="nav">
+      <button class="nav-item is-active" data-route="overview"><svg class="icon"><use href="#i-gauge"></use></svg><span>Overview</span></button>
+      <button class="nav-item" data-route="console"><svg class="icon"><use href="#i-monitor"></use></svg><span>Console</span></button>
+      <button class="nav-item" data-route="power"><svg class="icon"><use href="#i-power"></use></svg><span>Power</span></button>
+      <button class="nav-item" data-route="logs"><svg class="icon"><use href="#i-list"></use></svg><span>Event log</span></button>
+      <button class="nav-item" data-route="settings"><svg class="icon"><use href="#i-sliders"></use></svg><span>Settings</span></button>
+    </nav>
+    <div class="rail">
+      <div class="rail-link"><span class="dot" id="rail-dot"></span><span id="rail-link">Connecting</span></div>
+      <div class="rail-row"><span>Power</span><span class="mono" id="rail-power">—</span></div>
+      <div class="rail-row"><span>KVM</span><span class="mono" id="rail-kvm">—</span></div>
+      <div class="rail-row"><span>BMC</span><span class="mono" id="rail-bmc">—</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="page-title">Overview</h1>
+        <p id="page-sub">Server state and recent activity</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-ghost" id="btn-refresh-top"><svg class="icon"><use href="#i-refresh"></use></svg>Refresh</button>
+      </div>
+    </header>
+
+    <section class="page is-active" id="page-overview">
+      <div class="server-head card">
+        <div class="server-id">
+          <div class="eyebrow">Server</div>
+          <div class="server-name">etegro</div>
+          <div class="server-meta mono" id="server-meta">—</div>
+        </div>
+        <div class="server-side">
+          <div class="power-line"><span class="dot" id="power-dot"></span><span class="mono" id="power-state">—</span></div>
+          <button class="btn btn-primary" data-nav="console">Open console<svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="card stat">
+          <div class="stat-label">CPU 1</div>
+          <div class="stat-value mono" id="stat-cpu1">—</div>
+          <div class="stat-sub" id="stat-cpu1-sub">Temperature</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">CPU 2</div>
+          <div class="stat-value mono" id="stat-cpu2">—</div>
+          <div class="stat-sub" id="stat-cpu2-sub">Temperature</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">Mainboard</div>
+          <div class="stat-value mono" id="stat-mb">—</div>
+          <div class="stat-sub" id="stat-mb-sub">Temperature</div>
+        </div>
+        <div class="card stat">
+          <div class="stat-label">Fans</div>
+          <div class="stat-value mono" id="stat-fans">—</div>
+          <div class="stat-sub" id="stat-fans-sub">—</div>
+        </div>
+      </div>
+
+      <div class="main-grid">
+        <div class="card chart-card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Thermals</div>
+              <div class="card-sub">Last 4 minutes · °C</div>
+            </div>
+            <div class="legend">
+              <span class="legend-item"><i class="swatch swatch-cpu1"></i>CPU 1</span>
+              <span class="legend-item"><i class="swatch swatch-cpu2"></i>CPU 2</span>
+              <span class="legend-item"><i class="swatch swatch-mb"></i>Mainboard</span>
+            </div>
+          </div>
+          <canvas id="thermal-chart" height="224"></canvas>
+        </div>
+        <div class="card fans-card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Fans</div>
+              <div class="card-sub">Current speed</div>
+            </div>
+          </div>
+          <div class="fan-list" id="fan-list"></div>
+        </div>
+      </div>
+
+      <div class="card events-card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Recent events</div>
+            <div class="card-sub">System event log</div>
+          </div>
+          <button class="btn btn-ghost" data-nav="logs">View log<svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th class="col-time">Time</th><th class="col-sev">Severity</th><th>Event</th></tr></thead>
+            <tbody id="overview-events"><tr><td colspan="3" class="empty">Loading events</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-console">
+      <div class="console-layout">
+        <div class="consolex">
+          <div class="console-card">
+            <div class="console-toolbar">
+              <div class="console-meta mono">
+                <span id="console-res">—</span>
+                <span class="sep">·</span><span id="console-fps">0 fps</span>
+                <span class="sep">·</span><span id="console-age">no frames</span>
+              </div>
+              <div class="toolbar-actions">
+                <button class="btn btn-ghost" id="btn-cad"><svg class="icon"><use href="#i-keyboard"></use></svg>Ctrl Alt Del</button>
+                <button class="btn btn-ghost" id="btn-shot"><svg class="icon"><use href="#i-camera"></use></svg>Screenshot</button>
+                <button class="btn btn-ghost btn-icon" id="btn-fullscreen" title="Fullscreen"><svg class="icon"><use href="#i-maximize"></use></svg></button>
+              </div>
+            </div>
+            <div class="screen-wrap" id="screen-wrap" tabindex="0">
+              <img id="screen" src="/video" alt="Remote console" draggable="false">
+              <div class="screen-hint" id="screen-hint">Click to capture keyboard</div>
+              <div class="capture-badge mono" id="capture-badge" hidden>keyboard captured · Esc to release</div>
+            </div>
+            <div class="console-status mono">
+              <span id="console-session">disconnected</span>
+              <span class="sep">·</span><span id="console-decoder">decoder idle</span>
+            </div>
+          </div>
+        </div>
+        <aside class="console-side">
+          <div class="card side-card">
+            <div class="card-title">Session</div>
+            <dl class="kv">
+              <div><dt>BMC</dt><dd class="mono" id="side-host">—</dd></div>
+              <div><dt>User</dt><dd class="mono" id="side-user">—</dd></div>
+              <div><dt>Stream</dt><dd class="mono" id="side-stream">—</dd></div>
+              <div><dt>Latency</dt><dd class="mono" id="side-age">—</dd></div>
+              <div><dt>Keyboard</dt><dd class="mono" id="side-kbd">—</dd></div>
+            </dl>
+          </div>
+          <div class="card side-card">
+            <div class="card-title">Keyboard</div>
+            <p class="hint">Click the screen to capture keys. Esc releases them back to the app.</p>
+            <div class="keys">
+              <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Del</kbd>
+            </div>
+            <button class="btn btn-secondary btn-full" id="btn-cad-2">Send Ctrl Alt Del</button>
+          </div>
+          <div class="card side-card">
+            <div class="card-title">Mouse</div>
+            <p class="hint">Absolute pointer. Move over the screen to control the guest.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page" id="page-power">
+      <div class="power-grid">
+        <div class="card">
+          <div class="card-title">Power state</div>
+          <div class="power-big mono" id="power-big">—</div>
+          <div class="power-actions">
+            <button class="btn btn-secondary" data-power="on">Power on</button>
+            <button class="btn btn-secondary" data-power="shutdown">Graceful shutdown</button>
+            <button class="btn btn-secondary" data-power="reset">Reset</button>
+            <button class="btn btn-secondary" data-power="cycle">Power cycle</button>
+            <button class="btn btn-danger" data-power="off">Force off</button>
+          </div>
+          <p class="hint">Reset and force off interrupt the running system. Shutdown asks the OS to power down first.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Next boot</div>
+          <div class="field">
+            <label for="boot-device">Device</label>
+            <select id="boot-device">
+              <option value="default">Default</option>
+              <option value="pxe">Network (PXE)</option>
+              <option value="hd">Hard disk</option>
+              <option value="cd">Optical</option>
+              <option value="bios">BIOS setup</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="boot-apply">Apply for next boot</button>
+          <p class="hint">The override applies to the next reboot only.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-logs">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">System event log</div>
+            <div class="card-sub">Newest first · refresh every 10 seconds</div>
+          </div>
+          <button class="btn btn-ghost" id="btn-sel-refresh"><svg class="icon"><use href="#i-refresh"></use></svg>Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th class="col-time">Time</th><th class="col-sev">Severity</th><th>Event</th></tr></thead>
+            <tbody id="sel-body"><tr><td colspan="3" class="empty">Loading events</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-settings">
+      <div class="settings-grid">
+        <form class="card" id="settings-form">
+          <div class="card-title">Connection</div>
+          <div class="field">
+            <label for="cfg-host">BMC address</label>
+            <input id="cfg-host" class="mono" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfg-user">User</label>
+              <input id="cfg-user" class="mono" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="cfg-mac">Server MAC</label>
+              <input id="cfg-mac" class="mono" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+          <div class="field">
+            <label for="cfg-password">Password</label>
+            <input id="cfg-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current password">
+          </div>
+          <div class="field">
+            <label for="cfg-quality">Video quality</label>
+            <select id="cfg-quality">
+              <option value="0">Low</option>
+              <option value="1">Medium</option>
+              <option value="2">High</option>
+              <option value="3">Extreme</option>
+            </select>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit">Save and reconnect</button>
+            <span class="hint" id="password-state"></span>
+          </div>
+        </form>
+
+        <div class="card">
+          <div class="card-title">Maintenance</div>
+          <p class="hint">A cold reset restarts the BMC only. The host keeps running and comes back in about 90 seconds.</p>
+          <div class="maintenance-actions">
+            <button class="btn btn-secondary" id="btn-kvm-reconnect">Reconnect KVM</button>
+            <button class="btn btn-danger" id="btn-bmc-reset">Cold reset BMC</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">About</div>
+          <dl class="kv">
+            <div><dt>Panel</dt><dd class="mono">etegro BMC 0.1</dd></div>
+            <div><dt>IPMI</dt><dd class="mono" id="about-ipmi">—</dd></div>
+            <div><dt>Video</dt><dd class="mono" id="about-video">vendor codec, 1024×768</dd></div>
+            <div><dt>BMC</dt><dd class="mono" id="about-bmc">—</dd></div>
+          </dl>
+          <p class="hint credit">Design pass: unslop by @heydamir</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-title" id="modal-title">Confirm</div>
+    <div class="modal-text" id="modal-text"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn btn-danger" id="modal-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
