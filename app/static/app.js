@@ -799,6 +799,9 @@
       hideGate();
       toast(`Connected to ${result.mac}`, "ok");
       if (result.remembered) toast("Password saved for this Windows user", "ok");
+      if (result.codec === false) {
+        toast(`Video codec unavailable: ${result.codec_error || "unknown error"}`, "bad");
+      }
       await pollStatus();
       await pollSensors();
       loadSel();

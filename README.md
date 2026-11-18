@@ -9,6 +9,20 @@ your BMC and fetches a matching Temurin 8 x86 JRE from Adoptium.
 
 ![Overview](docs/overview.png)
 
+## Windows build
+
+The [Releases](https://github.com/ste4ik/etegro-bmc/releases) page has a
+ready-to-run Windows build (`etegro-bmc-windows-x64.zip`). Unpack it anywhere
+you can write (Desktop, Documents, a USB stick — not `Program Files`) and run
+`etegro-bmc.exe`. The zip already contains the 32-bit JRE; on the first
+connection the app downloads the video codec from the BMC itself, then opens
+the panel. No Python installation is required. The app keeps `config.json`,
+`vendor\` and `shots\` next to the executable, and only connects out to the
+BMC address you enter.
+
+The Python workflow below is still supported and is what the build is made
+from.
+
 ## Features
 
 - **Connect screen** — scan the LAN for BMCs or type the address, enter the
@@ -89,6 +103,17 @@ cd app
 `start.ps1` runs `setup.py` automatically when `runtime/` or `vendor/` is
 missing.
 
+## Build the Windows release
+
+```powershell
+python -m pip install pyinstaller
+powershell -ExecutionPolicy Bypass -File build-exe.ps1
+```
+
+The script runs PyInstaller in `%TEMP%`, copies `runtime\` next to the exe and
+writes `etegro-bmc-windows-x64.zip`. The vendor codec is deliberately not
+packed; the app fetches it from the BMC on first connection.
+
 ## Command line
 
 IPMI without the GUI:
@@ -114,7 +139,7 @@ from `ESMS_PASS`. Requires `pyghmi`.
   command/Huffman stream, not standard JPEG.
 - **Decoder** — `decoder/DecoderServer.java` loads the vendor DLL and keeps one
   `VideoController` alive, so partial frames and RC4 state work. It returns
-  BGR, 3 bytes per pixel. The Python side converts frames to MJPEG for the UI.
+  RGB, 3 bytes per pixel. The Python side converts frames to MJPEG for the UI.
 - **Input** — 8-byte HID reports: keyboard `0x8100`, absolute mouse `0x8200`
   after switching the console to absolute mode (`0x8202`).
 

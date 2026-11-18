@@ -12,7 +12,7 @@ import java.net.Socket;
 /**
  * Persistent decoder for the BMC video stream.
  * Protocol (big-endian): int32 length, frame bytes (32-byte header + payload).
- * Response: int32 width, int32 height, int32 boxes, then width*height*3 BGR bytes.
+ * Response: int32 width, int32 height, int32 boxes, then width*height*3 RGB bytes.
  */
 public class DecoderServer {
     public static void main(String[] args) throws Exception {

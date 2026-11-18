@@ -10,3 +10,8 @@ app/static/shots/
 __pycache__/
 *.pyc
 *.pyo
+
+# release build output
+build/
+dist/
+etegro-bmc-windows-x64.zip

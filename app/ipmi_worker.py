@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """One long-lived IPMI session in its own process.
 
-The GUI talks to this over stdin/stdout with one JSON object per line. Keeping
-pyghmi in a separate process means a broken session can be discarded by
-restarting the worker, without poisoning the web process.
+The GUI talks to this over a local TCP socket (or stdin/stdout when no --port
+is given), one JSON object per line. Keeping pyghmi in a separate process
+means a broken session can be discarded by restarting the worker, without
+poisoning the web process.
 """
 import json
 import os
+import socket
 import sys
 
 
@@ -16,7 +18,7 @@ def field(obj, name, default=None):
     return getattr(obj, name, default)
 
 
-def main():
+def run_worker(reader, writer):
     host = os.environ.get("ESMS_WORKER_HOST", "")
     user = os.environ.get("ESMS_WORKER_USER", "root")
     password = os.environ.get("ESMS_WORKER_PASS", "")
@@ -83,7 +85,7 @@ def main():
         minor = data[3] if len(data) > 3 else 0
         return {"firmware": f"{major}.{minor:02x}", "raw": data.hex()}
 
-    for line in sys.stdin:
+    for line in reader:
         line = line.strip()
         if not line:
             continue
@@ -113,10 +115,63 @@ def main():
                 drop()
             else:
                 raise ValueError(f"unknown command: {action}")
-            print(json.dumps({"ok": True, "data": data}), flush=True)
+            writer.write(json.dumps({"ok": True, "data": data}) + "\n")
+            writer.flush()
         except Exception as exc:  # noqa: BLE001
             drop()
-            print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+            try:
+                writer.write(json.dumps({"ok": False, "error": str(exc)}) + "\n")
+                writer.flush()
+            except Exception:  # noqa: BLE001
+                return
+
+
+def main():
+    try:
+        _main()
+    except Exception:  # noqa: BLE001
+        log = os.environ.get("ESMS_WORKER_LOG")
+        if log:
+            import traceback
+            try:
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write("worker failed\n")
+                    traceback.print_exc(file=fh)
+            except OSError:
+                pass
+        raise
+
+
+def _main():
+    port = None
+    argv = sys.argv
+    for index, argument in enumerate(argv):
+        if argument == "--port" and index + 1 < len(argv):
+            try:
+                port = int(argv[index + 1])
+            except ValueError:
+                port = None
+    if port:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", port))
+        server.listen(1)
+        connection, _ = server.accept()
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        reader = connection.makefile("r", encoding="utf-8", newline="\n")
+        writer = connection.makefile("w", encoding="utf-8", newline="\n")
+        try:
+            run_worker(reader, writer)
+        finally:
+            try:
+                reader.close()
+                writer.close()
+                connection.close()
+                server.close()
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        run_worker(sys.stdin, sys.stdout)
 
 
 if __name__ == "__main__":

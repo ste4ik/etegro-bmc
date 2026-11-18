@@ -4,31 +4,50 @@ import base64
 import io
 import json
 import os
-import queue
 import re
 import select
 import socket
+import ssl
 import struct
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
+import zipfile
 from collections import deque
 
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 from PIL import Image, ImageDraw, ImageFont
 
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE)
+# Frozen builds put read-only resources in _MEIPASS and keep config, runtime and
+# vendor files next to the executable.
+FROZEN = bool(getattr(sys, "frozen", False))
+WORKER_MODE = "--ipmi-worker" in sys.argv
+if FROZEN:
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RESOURCE_DIR = getattr(sys, "_MEIPASS", APP_DIR)
+    DIST_ROOT = APP_DIR
+elif "__file__" in globals():
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    RESOURCE_DIR = APP_DIR
+    DIST_ROOT = os.path.dirname(APP_DIR)
+else:  # PyInstaller --onefile entry without __file__
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RESOURCE_DIR = getattr(sys, "_MEIPASS", APP_DIR)
+    DIST_ROOT = APP_DIR
+
+MODULE_DIR = RESOURCE_DIR if FROZEN else DIST_ROOT
+BASE = DIST_ROOT
+sys.path.insert(0, MODULE_DIR)
 import esmskvm as K  # noqa: E402
 
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
-SHOTS_DIR = os.path.join(APP_DIR, "static", "shots")
+SHOTS_DIR = (os.path.join(APP_DIR, "shots") if FROZEN
+             else os.path.join(APP_DIR, "static", "shots"))
 os.makedirs(SHOTS_DIR, exist_ok=True)
 
-DIST_ROOT = os.path.dirname(APP_DIR)
 RUNTIME_DIR = os.path.join(DIST_ROOT, "runtime")
 VENDOR_DIR = os.path.join(DIST_ROOT, "vendor")
 
@@ -70,7 +89,62 @@ def find_vendor():
     return jar, dll
 
 
-CLASSES = os.path.join(APP_DIR, "decoder", "classes")
+DLL_IN_JAR = "lib/jni/video/libWindowsVDecode.dll"
+
+
+def _legacy_ssl_context():
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+    except (AttributeError, ValueError, ssl.SSLError):
+        pass
+    return ctx
+
+
+def ensure_vendor(host):
+    """Fetch the BMC's own decoder from the appliance itself, once.
+
+    The vendor binaries are not part of this project. The BMC serves its own
+    JavaRSM.jar without a login; the decoder DLL lives inside it.
+    """
+    jar_path = os.path.join(VENDOR_DIR, "JavaRSM.jar")
+    dll_path = os.path.join(VENDOR_DIR, "libWindowsVDecode.dll")
+    if os.path.isfile(jar_path) and os.path.isfile(dll_path):
+        return True
+    os.makedirs(VENDOR_DIR, exist_ok=True)
+    ctx = _legacy_ssl_context()
+    headers = {"User-Agent": "etegro-bmc"}
+    data = None
+    for url in (f"https://{host}/lib/rsm/JavaRSM.jar",
+                f"http://{host}/lib/rsm/JavaRSM.jar",
+                f"https://{host}/JavaRSM.jar"):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+                payload = resp.read()
+            if payload[:2] == b"PK" and len(payload) > 100_000:
+                data = payload
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    if not data:
+        raise RuntimeError("Could not download the video codec from the BMC")
+    with open(jar_path, "wb") as fh:
+        fh.write(data)
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as jar:
+            dll = jar.read(DLL_IN_JAR)
+    except KeyError as exc:
+        raise RuntimeError("The video decoder is missing from JavaRSM.jar") from exc
+    with open(dll_path, "wb") as fh:
+        fh.write(dll)
+    return True
+
+
+CLASSES = os.path.join(RESOURCE_DIR if FROZEN else APP_DIR, "decoder", "classes")
 DECODER_PORT = 18902
 
 
@@ -291,7 +365,7 @@ def _cached(name, ttl, producer):
 
 
 class IpmiWorker:
-    """One pyghmi session in its own process, spoken to over a pipe."""
+    """One pyghmi session in its own process, spoken to over localhost TCP."""
 
     def __init__(self, host, user, password):
         env = dict(os.environ)
@@ -302,39 +376,61 @@ class IpmiWorker:
         })
         creationflags = 0x08000000 if os.name == "nt" else 0
         self.lock = threading.Lock()
-        self.queue = queue.Queue()
+        self.port = self._free_port()
+        if FROZEN:
+            command = [sys.executable, "--ipmi-worker", "--port", str(self.port)]
+        else:
+            command = [sys.executable, os.path.join(APP_DIR, "ipmi_worker.py"),
+                       "--port", str(self.port)]
+        self.sock = None
+        self.reader = None
         self.proc = subprocess.Popen(
-            [sys.executable, os.path.join(APP_DIR, "ipmi_worker.py")],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding="utf-8", bufsize=1, env=env,
-            cwd=APP_DIR, creationflags=creationflags)
-        threading.Thread(target=self._reader, daemon=True).start()
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=env, cwd=APP_DIR,
+            creationflags=creationflags)
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            try:
+                self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                break
+            except OSError:
+                if self.proc.poll() is not None:
+                    break
+                time.sleep(0.15)
+        if self.sock is None:
+            self.stop()
+            raise RuntimeError("IPMI worker did not start")
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.reader = self.sock.makefile("r", encoding="utf-8", newline="\n")
 
-    def _reader(self):
-        proc = self.proc
-        if not proc or not proc.stdout:
-            return
-        for line in proc.stdout:
-            line = line.strip()
-            if line.startswith("{"):
-                self.queue.put(line)
+    @staticmethod
+    def _free_port():
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
+        finally:
+            probe.close()
 
     def request(self, command, timeout=20, **payload):
         with self.lock:
-            proc = self.proc
-            if not proc or proc.poll() is not None:
+            if not self.sock or not self.reader:
                 raise RuntimeError("IPMI worker is not running")
             request = {"cmd": command}
             request.update(payload)
             try:
-                proc.stdin.write(json.dumps(request) + "\n")
-                proc.stdin.flush()
+                self.sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
             except OSError as exc:
                 raise RuntimeError(f"IPMI worker write failed: {exc}") from exc
+            self.sock.settimeout(timeout)
             try:
-                line = self.queue.get(timeout=timeout)
-            except queue.Empty as exc:
+                line = self.reader.readline()
+            except socket.timeout as exc:
                 raise TimeoutError("IPMI call timed out") from exc
+            except OSError as exc:
+                raise RuntimeError(f"IPMI worker read failed: {exc}") from exc
+            if not line:
+                raise RuntimeError("IPMI worker closed the connection")
             try:
                 response = json.loads(line)
             except ValueError as exc:
@@ -347,12 +443,17 @@ class IpmiWorker:
         with self.lock:
             proc = self.proc
             self.proc = None
+            reader, sock = self.reader, self.sock
+            self.reader = None
+            self.sock = None
+            for stream in (reader, sock):
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
             if not proc:
                 return
-            try:
-                proc.stdin.close()
-            except Exception:  # noqa: BLE001
-                pass
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
@@ -512,7 +613,7 @@ class Bmc:
                 return {"firmware": "unknown", "raw": str(exc)}
         return _cached("bmc_info", 300, producer)
 
-bmc = Bmc()
+bmc = None if WORKER_MODE else Bmc()
 
 
 # ---------------------------------------------------------------- decoder
@@ -567,8 +668,8 @@ class Decoder:
                     self.sock.sendall(struct.pack(">i", len(frame)) + frame)
                     header = self._recv_exact(12)
                     width, height, boxes = struct.unpack(">iii", header)
-                    bgr = self._recv_exact(width * height * 3)
-                    return width, height, boxes, bgr
+                    pixels = self._recv_exact(width * height * 3)
+                    return width, height, boxes, pixels
                 except OSError:
                     try:
                         if self.sock:
@@ -708,10 +809,10 @@ class KvmSession:
                     continue
                 if fn != 0x8000 or len(data) < 32:
                     continue
-                width, height, boxes, bgr = self.decoder.decode(data)
+                width, height, boxes, pixels = self.decoder.decode(data)
                 now = time.time()
                 with self.cond:
-                    self.frame = (width, height, bgr)
+                    self.frame = (width, height, pixels)
                     self.frame_seq += 1
                     self.last_frame = now
                     self.frame_times.append(now)
@@ -754,10 +855,10 @@ class KvmSession:
             frame = self.frame
         if not frame:
             return None
-        width, height, bgr = frame
+        width, height, pixels = frame
         name = f"shot-{time.strftime('%Y%m%d-%H%M%S')}.png"
         path = os.path.join(SHOTS_DIR, name)
-        Image.frombytes("RGB", (width, height), bgr, "raw", "BGR").save(path)
+        Image.frombytes("RGB", (width, height), pixels, "raw", "RGB").save(path)
         return f"/shots/{name}"
 
     def status(self):
@@ -827,10 +928,10 @@ def frame_jpeg(seq, frame):
     with _jpeg_lock:
         if _jpeg_cache["seq"] == seq and _jpeg_cache["data"]:
             return _jpeg_cache["data"]
-    width, height, bgr = frame
-    img = Image.frombytes("RGB", (width, height), bgr, "raw", "BGR")
+    width, height, pixels = frame
+    img = Image.frombytes("RGB", (width, height), pixels, "raw", "RGB")
     buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=72)
+    img.save(buf, "JPEG", quality=85, subsampling=0, optimize=True)
     data = buf.getvalue()
     with _jpeg_lock:
         _jpeg_cache.update(seq=seq, data=data)
@@ -860,7 +961,9 @@ def mjpeg_stream():
 
 # ---------------------------------------------------------------- web app
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+app = Flask(__name__,
+            static_folder=os.path.join(RESOURCE_DIR, "static"),
+            template_folder=os.path.join(RESOURCE_DIR, "templates"))
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
@@ -919,6 +1022,14 @@ def api_connect():
         power = bmc.connect(host, user, password, mac)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 400
+    codec_ok, codec_error = True, ""
+    try:
+        ensure_vendor(host)
+    except Exception as exc:  # noqa: BLE001
+        codec_ok, codec_error = False, str(exc)
+    if codec_ok and not find_java():
+        codec_ok = False
+        codec_error = "The 32-bit JRE is missing"
     if remember:
         token = protect_secret(password)
         if token:
@@ -935,7 +1046,8 @@ def api_connect():
     time.sleep(0.1)
     kvm.start()
     return jsonify({"ok": True, "mac": bmc.config["mac"], "power": power,
-                    "remembered": bool(bmc.config.get("password_enc"))})
+                    "remembered": bool(bmc.config.get("password_enc")),
+                    "codec": codec_ok, "codec_error": codec_error})
 
 
 @app.route("/api/status")
@@ -1087,6 +1199,10 @@ def api_reconnect():
 
 
 def main():
+    if WORKER_MODE:
+        import ipmi_worker
+        ipmi_worker.main()
+        return
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
@@ -1099,7 +1215,10 @@ def main():
                      daemon=True).start()
     url = f"http://127.0.0.1:{args.port}/"
     if args.no_window:
-        print(url)
+        try:
+            print(url, flush=True)
+        except (AttributeError, OSError):
+            pass
         while True:
             time.sleep(1)
     try:
